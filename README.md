@@ -19,7 +19,7 @@ Para mitigar as vulnerabilidades nativas do Bluetooth 4.1 (como Eavesdropping e 
 * `core/ble_server.py`: Implementação do Servidor GATT e Periférico.
 * `core/crypto.py`: Módulo crítico de criptografia (AES-GCM).
 * `core/wifi.py`: Automação da ligação Wi-Fi via `nmcli`.
-* `core/server.py`: Simulador da aplicação móvel para testes de cifragem.
+* `core/server.py`: Simulador da aplicação móvel para testes de cifragem. (eliminado por não ter muita relevância)
 
 ## 🚀 Como Executar
 
