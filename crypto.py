@@ -1,6 +1,7 @@
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
 import json
+import base64
 
 # chave fixa (para já)
 KEY = b'1234567890123456'  # 16 bytes (AES-128)
@@ -24,8 +25,10 @@ def decrypt(payload):
     try:
         aesgcm = AESGCM(KEY)
 
-        nonce = bytes.fromhex(payload["nonce"])
-        ciphertext = bytes.fromhex(payload["ciphertext"])
+        
+
+        nonce = base64.b64decode(payload["nonce"])
+        ciphertext = base64.b64decode(payload["ciphertext"])
 
         decrypted = aesgcm.decrypt(nonce, ciphertext, None)
 
