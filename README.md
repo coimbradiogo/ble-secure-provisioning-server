@@ -308,4 +308,5 @@ wlo1
 # Autor
 
 Diogo Coimbra
+Gabriel Santos
 ESTG — Engenharia Informática
