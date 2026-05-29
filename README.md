@@ -58,7 +58,7 @@ Este projeto implementa uma camada de segurança adicional para garantir:
 # Arquitetura
 
 ```text
-iPhone App
+App
      │
      │ BLE 4.1 + AES-GCM
      ▼
