@@ -1,26 +1,34 @@
 import os
+import shlex
 
-def connect_wifi(ssid, password):
+
+def connect_wifi(ssid, password, interface="wlo1"):
     print(f"A tentar ligar ao Wi-Fi: {ssid}...")
-    
-    # 1. Tenta apagar uma ligação antiga com o mesmo nome para evitar conflitos
-    os.system(f'sudo nmcli connection delete "{ssid}" > /dev/null 2>&1')
-    
-    # 2. Cria a nova ligação com os parâmetros que funcionaram no teu terminal
-    # Nota: Usamos 'ifname wlo1' porque é a tua interface real
-    comando_add = (f'nmcli connection add type wifi con-name "{ssid}" ifname wlo1 ssid "{ssid}" -- '
-                   f'wifi-sec.key-mgmt wpa-psk wifi-sec.psk "{password}"')
-    
+
+    safe_ssid = shlex.quote(ssid)
+    safe_password = shlex.quote(password)
+    safe_interface = shlex.quote(interface)
+
+    os.system(f"sudo nmcli connection delete {safe_ssid} > /dev/null 2>&1")
+
+    comando_add = (
+        f"nmcli connection add type wifi con-name {safe_ssid} "
+        f"ifname {safe_interface} ssid {safe_ssid} -- "
+        f"wifi-sec.key-mgmt wpa-psk wifi-sec.psk {safe_password}"
+    )
+
     print("A configurar perfil de rede...")
-    os.system(comando_add)
-    
-    # 3. Ativa a ligação
+    add_result = os.system(comando_add)
+    if add_result != 0:
+        print("--- ERRO: Falha ao criar perfil Wi-Fi ---")
+        return False
+
     print("A ativar ligação...")
-    resultado = os.system(f'nmcli connection up "{ssid}"')
-    
+    resultado = os.system(f"nmcli connection up {safe_ssid}")
+
     if resultado == 0:
         print(f"--- SUCESSO: Conectado à rede {ssid} ---")
         return True
-    else:
-        print("--- ERRO: Falha na ativação do Wi-Fi ---")
-        return False
+
+    print("--- ERRO: Falha na ativação do Wi-Fi ---")
+    return False
