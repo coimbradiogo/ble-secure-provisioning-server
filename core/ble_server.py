@@ -1,6 +1,7 @@
 import json
 import subprocess
 from time import time
+
 from bluezero import peripheral, adapter
 
 from core.config import (
@@ -11,6 +12,8 @@ from core.config import (
     DEVICE_NAME,
     PROVISIONING_PIN,
     SESSION_TTL_SECONDS,
+    MAX_ATTEMPTS,
+    RATE_LIMIT_WINDOW_SECONDS,
 )
 from core.crypto import (
     create_server_session,
@@ -29,6 +32,9 @@ class ProvisioningServer:
         self.pending_session = None
         self.active_session = None
         self.closed_session_ids = set()
+
+        self.failed_attempts = 0
+        self.rate_window_started_at = time()
 
         self._prepare_bluetooth()
 
@@ -54,7 +60,6 @@ class ProvisioningServer:
 
     def _prepare_bluetooth(self):
         print("[BLE] A preparar Bluetooth...")
-
         self._run("rfkill unblock bluetooth")
         self._run("bluetoothctl power on")
         self._run("bluetoothctl agent NoInputNoOutput")
@@ -62,6 +67,26 @@ class ProvisioningServer:
         self._run("bluetoothctl discoverable on")
         self._run("bluetoothctl pairable on")
         self._run("bluetoothctl discoverable-timeout 0")
+
+    def _json_response(self, payload: dict):
+        self.last_auth_response = json.dumps(payload).encode("utf-8")
+
+    def _session_expired(self, session) -> bool:
+        return session is None or (time() - session.created_at) > SESSION_TTL_SECONDS
+
+    def _check_rate_limit(self):
+        now = time()
+
+        if now - self.rate_window_started_at > RATE_LIMIT_WINDOW_SECONDS:
+            self.failed_attempts = 0
+            self.rate_window_started_at = now
+
+        if self.failed_attempts >= MAX_ATTEMPTS:
+            raise ValueError("demasiadas tentativas, tenta novamente mais tarde")
+
+    def _register_failure(self):
+        self.failed_attempts += 1
+        print(f"[SECURITY] Tentativa falhada {self.failed_attempts}/{MAX_ATTEMPTS}")
 
     def start(self):
         print("[BLE] A criar serviço GATT...")
@@ -115,39 +140,33 @@ class ProvisioningServer:
 
         self.app.publish()
 
-    def _json_response(self, payload: dict):
-        self.last_auth_response = json.dumps(payload).encode("utf-8")
-
-    def _session_expired(self, session) -> bool:
-        return session is None or (time() - session.created_at) > SESSION_TTL_SECONDS
-
     def on_auth_write(self, value, options):
         raw = bytes(value).decode("utf-8", errors="replace")
         print(f"[AUTH] RAW: {raw}")
 
         try:
+            self._check_rate_limit()
+
             payload = json.loads(raw)
-        except json.JSONDecodeError:
-            self._set_status("AUTH JSON invalido")
-            self._json_response({"type": "error", "message": "json_invalido"})
-            return
+            msg_type = payload.get("type")
 
-        msg_type = payload.get("type")
-
-        try:
             if msg_type == "client_hello":
-                # Uma sessão de provisionamento de cada vez.
                 if self.active_session and not self.active_session.closed:
                     raise ValueError("ja existe uma sessao ativa")
 
                 session, server_hello = create_server_session(payload, PROVISIONING_PIN)
+                
+                print("[AUTH] server_hello enviado:")
+                print(json.dumps(server_hello, indent=2))
+
+                print("[AUTH] server_proof enviado:")
+                print(server_hello["server_proof"])
 
                 if session.session_id in self.closed_session_ids:
                     raise ValueError("session_id repetido")
 
                 self.pending_session = session
                 self._json_response(server_hello)
-                self._set_status("server_hello pronto")
                 return
 
             if msg_type == "client_proof":
@@ -168,13 +187,21 @@ class ProvisioningServer:
                 session.client_proof_ok = True
                 self.active_session = session
                 self.pending_session = None
+
+                self.failed_attempts = 0
                 self._json_response({"type": "auth_ok", "session_id": session.session_id})
                 self._set_status("sessao segura estabelecida")
                 return
 
             raise ValueError(f"tipo AUTH desconhecido: {msg_type}")
 
+        except json.JSONDecodeError:
+            self._register_failure()
+            self._json_response({"type": "error", "message": "json_invalido"})
+            self._set_status("AUTH JSON invalido")
+
         except Exception as exc:
+            self._register_failure()
             self._json_response({"type": "error", "message": str(exc)})
             self._set_status(f"AUTH erro: {exc}")
 
@@ -187,12 +214,9 @@ class ProvisioningServer:
         print(f"[CONFIG] RAW: {raw}")
 
         try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            self._set_status("CONFIG JSON invalido")
-            return
+            self._check_rate_limit()
 
-        try:
+            payload = json.loads(raw)
             session = self.active_session
 
             if self._session_expired(session):
@@ -213,9 +237,8 @@ class ProvisioningServer:
                 raise ValueError("nonce repetido")
 
             credentials = decrypt_credentials(session, payload)
-            ssid, password = parse_credentials(credentials)
+            ssid, password = parse_credentials(credentials, payload.get("timestamp"))
 
-            # Marca o nonce como usado só depois de autenticar e validar o payload.
             session.used_message_nonces.add(nonce)
 
             ok = connect_wifi(ssid, password)
@@ -223,13 +246,19 @@ class ProvisioningServer:
             session.closed = True
             self.closed_session_ids.add(session.session_id)
             self.active_session = None
+            self.failed_attempts = 0
 
             if ok:
                 self._set_status(f"Wi-Fi configurado: {ssid}")
             else:
                 self._set_status("Falha ao configurar Wi-Fi")
 
+        except json.JSONDecodeError:
+            self._register_failure()
+            self._set_status("CONFIG JSON invalido")
+
         except Exception as exc:
+            self._register_failure()
             self._set_status(f"CONFIG erro: {exc}")
 
     def on_status_read(self):
