@@ -8,10 +8,9 @@ from time import time
 from typing import Set
 
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
 
 from core.config import PROTOCOL_VERSION
 
@@ -65,7 +64,7 @@ def load_client_public_key(public_key_raw: bytes):
     )
 
 
-def create_server_session(client_hello: dict, provisioning_pin: str) -> tuple[SecureSession, dict]:
+def create_server_session(client_hello: dict, provisioning_pin: str):
     if client_hello.get("version") != PROTOCOL_VERSION:
         raise ValueError("versao do protocolo invalida")
 
@@ -143,15 +142,18 @@ def decrypt_credentials(session: SecureSession, payload: dict) -> dict:
     if payload.get("session_id") != session.session_id:
         raise ValueError("session_id invalido")
 
+    timestamp = payload.get("timestamp")
+    if not isinstance(timestamp, int):
+        raise ValueError("timestamp em falta ou invalido")
+
     nonce = read_b64(payload, "nonce")
     ciphertext = read_b64(payload, "ciphertext")
 
     if len(nonce) != 12:
         raise ValueError("nonce AES-GCM deve ter 12 bytes")
 
-    aad = f"ble-provisioning-v{PROTOCOL_VERSION}|{session.session_id}".encode()
+    aad = f"ble-provisioning-v{PROTOCOL_VERSION}|{session.session_id}|{timestamp}".encode()
 
-    # Opcional: se a app enviar o campo aad, confirma que é igual ao esperado.
     if payload.get("aad"):
         received_aad = read_b64(payload, "aad")
         if received_aad != aad:
